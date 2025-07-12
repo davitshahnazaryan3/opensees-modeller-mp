@@ -4,9 +4,9 @@ from scipy import optimize, stats
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 
-from .utilities import mlefit, spline, is_list_of_lists, \
-    cdf_lognormal_norm
-from plot_styles import FONTSIZE
+from .utilities import mlefit_ida, spline, is_list_of_lists, \
+    cdf_lognormal_norm, mlefit_msa
+from .plot_styles import FONTSIZE
 
 
 def plot_fragility(
@@ -153,6 +153,13 @@ def retrieve_demand_for_calc(directionality: Union[int, None],
     return dem
 
 
+def enforce_non_decreasing(arr):
+    for i in range(1, len(arr)):
+        if arr[i] < arr[i - 1]:
+            arr[i] = arr[i - 1]  # Set it equal to the previous one
+    return arr
+
+
 class Fragility:
     def __init__(self, imls: np.ndarray) -> None:
         """Provides tools to calculate fragility functions
@@ -170,7 +177,7 @@ class Fragility:
 
     def collapse_capacity(
             self, demand: List[np.ndarray], flat_slope: float = 0.1,
-            dcap: float = 10., beta: float = 0.0):
+            dcap: float = 10., beta: float = 0.0, fit='msa'):
         """Calculate IML vs POE fragility for the collapse limit state
 
         Parameters
@@ -207,78 +214,90 @@ class Fragility:
         # Get the maximum PSDs for the building and shrink one axis of NLTHA
         demand = np.max(demand, axis=2)
 
-        # Initialize
-        psd_max = np.max(demand) if np.max(demand) < 10. else 10.
-        iml_max = np.max(self.imls)
+        if fit=='ida':
+            # Initialize
+            psd_max = np.max(demand) if np.max(demand) < 10. else 10.
+            iml_max = np.max(self.imls)
 
-        psd_max_mod = min(psd_max, dcap)
-        iml_max_mod = iml_max
-        exceeds = np.zeros(nsim)
+            psd_max_mod = min(psd_max, dcap)
+            iml_max_mod = iml_max
+            exceeds = np.zeros(nsim)
 
-        for rec in range(nsim):
-            order = self.imls[:, rec].argsort()
-            iml_range = self.imls[:, rec][order]
-            iml_range = np.append(iml_range, iml_range[-1])
+            for rec in range(nsim):
+                order = self.imls[:, rec].argsort()
+                iml_range = self.imls[:, rec][order]
+                iml_range = np.append(iml_range, iml_range[-1])
 
-            # Get the PSD range for each simulation/record
-            psd = demand[:, rec][order]
+                # Get the PSD range for each simulation/record
+                psd = demand[:, rec][order]
 
-            # flatline
-            psd = np.append(psd, psd_max_mod)
+                # flatline
+                psd = np.append(psd, psd_max_mod)
 
-            # Create a spline of psd vs iml
-            psd_spline, iml_spline = spline(psd, iml_range)
-            slope_init = iml_range[1] / psd[1]
+                # Create a spline of psd vs iml
+                psd_spline, iml_spline = spline(psd, iml_range)
+                slope_init = iml_range[1] / psd[1]
 
-            slopes = np.diff(iml_spline) / np.diff(psd_spline)
+                slopes = np.diff(iml_spline) / np.diff(psd_spline)
 
-            try:
-                flat_idx = np.where(
-                    slopes == slopes[(slopes < flat_slope * slope_init)
-                                     & (slopes > 0)
-                                     & (slopes != np.inf)][0])[0][0]
-            except IndexError:
-                flat_idx = len(iml_spline) - 1
-                print(f"[WARNING] IDA for record {rec} not flatlining")
+                try:
+                    flat_idx = np.where(
+                        slopes == slopes[(slopes < flat_slope * slope_init)
+                                        & (slopes > 0)
+                                        & (slopes != np.inf)][0])[0][0]
+                except IndexError:
+                    flat_idx = len(iml_spline) - 1
+                    print(f"[WARNING] IDA for record {rec} not flatlining")
 
-            flat_iml = iml_spline[flat_idx - 1]
-            flat_psd = psd_spline[flat_idx - 1]
-            flat_psd_lim = dcap
-            if flat_psd > flat_psd_lim:
-                flat_psd = flat_psd_lim
-                flat_iml = float(iml_spline[np.where(
-                    psd_spline == psd_spline[
-                        psd_spline > flat_psd_lim][0])[0]])
+                flat_iml = iml_spline[flat_idx - 1]
+                flat_psd = psd_spline[flat_idx - 1]
+                flat_psd_lim = dcap
+                if flat_psd > flat_psd_lim:
+                    flat_psd = flat_psd_lim
+                    flat_iml = float(iml_spline[np.where(
+                        psd_spline == psd_spline[
+                            psd_spline > flat_psd_lim][0])[0]])
 
-            exceeds[rec] = flat_iml
+                exceeds[rec] = flat_iml
 
-        iml_min = min(exceeds)
-        iml_max = max(exceeds)
+            iml_min = min(exceeds)
+            iml_max = max(exceeds)
 
-        # Fragility calculations with maximum likelihood (MLE) fitting
-        iml_all = np.linspace(0, iml_max_mod, 100)
-        counts = np.zeros(iml_all.shape)
+            # Fragility calculations with maximum likelihood (MLE) fitting
+            iml_all = np.linspace(0, iml_max_mod, 100)
+            counts = np.zeros(iml_all.shape)
 
-        counts = np.sum(exceeds[:, np.newaxis] < iml_all, axis=0)
-        counts[iml_all < iml_min] = 0
-        counts[iml_all > iml_max] = len(exceeds)
+            counts = np.sum(exceeds[:, np.newaxis] < iml_all, axis=0)
+            counts[iml_all < iml_min] = 0
+            counts[iml_all > iml_max] = len(exceeds)
 
-        # number of records
-        n_rec = len(exceeds)
+            # number of records
+            n_rec = len(exceeds)
 
-        xs = iml_all
-        ys = counts
-        if xs[0] == 0:
-            xs, ys = xs[1:], ys[1:]
-        theta_hat_mom = np.exp(np.mean(np.log(xs)))
-        beta_hat_mom = np.std(np.log(xs))
-        x0 = [theta_hat_mom, beta_hat_mom]
+            xs = iml_all
+            ys = counts
+            if xs[0] == 0:
+                xs, ys = xs[1:], ys[1:]
+            theta_hat_mom = np.exp(np.mean(np.log(xs)))
+            beta_hat_mom = np.std(np.log(xs))
+            x0 = [theta_hat_mom, beta_hat_mom]
 
-        xopt_mle = optimize.fmin(
-            func=lambda var: mlefit(median=var[0], dispersion=var[1],
-                                    total_count=n_rec,
-                                    count=np.array(ys[1:]), data=xs[1:]),
-            x0=x0, maxiter=3000, maxfun=3000, disp=False)
+            xopt_mle = optimize.fmin(
+                func=lambda var: mlefit_ida(median=var[0], dispersion=var[1],
+                                        total_count=n_rec,
+                                        count=np.array(ys[1:]), data=xs[1:]),
+                x0=x0, maxiter=3000, maxfun=3000, disp=False)
+
+            ecdf = (xs[1:], ys[1:] / n_rec)
+            
+        elif fit=='msa':
+            num_gms = demand.shape[1]
+            num_collapse = np.sum(demand >= dcap, axis=1)
+            enforce_non_decreasing(num_collapse)  # TODO: I am not sure about this
+            msa_imls = self.imls[:, 0]
+            ecdf = (msa_imls, num_collapse / num_gms)
+            xopt_mle = mlefit_msa(msa_imls, num_gms, num_collapse)
+        
         theta_mle = xopt_mle[0]
         beta_mle = (xopt_mle[1] ** 2 + beta ** 2) ** 0.5
 
@@ -286,7 +305,7 @@ class Fragility:
             np.log(self.iml_range / theta_mle) / beta_mle, loc=0, scale=1
         )
 
-        return {'median': theta_mle, 'beta': beta_mle, 'probs': list(probs)}
+        return {'median': theta_mle, 'beta': beta_mle, 'probs': list(probs), 'ecdf': ecdf}
 
     def demolition_capacity(self, residuals: np.ndarray, median: float,
                             beta: float):
@@ -349,7 +368,7 @@ class Fragility:
             x0 = [theta_hat_mom, beta_hat_mom]
 
             xopt_mle = optimize.fmin(
-                func=lambda var: mlefit(median=var[0], dispersion=var[1],
+                func=lambda var: mlefit_ida(median=var[0], dispersion=var[1],
                                         total_count=num_recs,
                                         count=counts, data=edp_range),
                 x0=x0, maxiter=100, maxfun=100, disp=False)
@@ -371,7 +390,7 @@ class Fragility:
         beta_hat_mom = np.std(np.log(xs))
         x0 = [theta_hat_mom, beta_hat_mom]
         xopt_mle = optimize.fmin(
-            func=lambda var: mlefit(median=var[0], dispersion=var[1],
+            func=lambda var: mlefit_ida(median=var[0], dispersion=var[1],
                                     total_count=num_recs,
                                     count=ys, data=xs),
             x0=x0, maxiter=100, maxfun=100, disp=False)
