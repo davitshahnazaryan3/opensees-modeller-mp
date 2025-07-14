@@ -29,7 +29,7 @@ def convert_demands(demands):
 
     for rec in range(1, nrecs + 1):
         out[str(rec)] = {}
-        for d in ["1", "2"]:
+        for d in ["1", "2", "SRSS"]:
             if d not in demands[first_key]:
                 continue
 
@@ -237,6 +237,7 @@ class Demand:
         # Initialize NLTHA outputs ndarray variable
         # (direction, iml, ground motion, variable)
         nltha = [
+            np.zeros((niml, ngm, nvar)),
             np.zeros((niml, ngm, nvar)),
             np.zeros((niml, ngm, nvar)),
         ]

@@ -151,6 +151,7 @@ class MSAPostprocessor:
             out[level] = {
                 "1": {"PFA": {}, "disp": {}, "PSD": {}, "RPSD": {}},
                 "2": {"PFA": {}, "disp": {}, "PSD": {}, "RPSD": {}},
+                "SRSS": {"PFA": {}, "disp": {}, "PSD": {}, "RPSD": {}},
                 "return-period": rp,
                 'intensity-measure': im,
             }
@@ -162,14 +163,23 @@ class MSAPostprocessor:
                 for st in range(nst + 1):
                     out[level][str(d + 1)]["PFA"][st] = []
                     out[level][str(d + 1)]["disp"][st] = []
+                    out[level]['SRSS']["PFA"][st] = []
+                    out[level]['SRSS']["disp"][st] = []
                     if st != nst:
                         out[level][str(d + 1)]["PSD"][st + 1] = []
                         out[level][str(d + 1)]["RPSD"][st + 1] = []
+                        out[level]['SRSS']["PSD"][st + 1] = []
+                        out[level]['SRSS']["RPSD"][st + 1] = []
 
                 out[level][str(d + 1)]["PFA"]["global"] = []
                 out[level][str(d + 1)]["disp"]["global"] = []
                 out[level][str(d + 1)]["PSD"]["global"] = []
                 out[level][str(d + 1)]["RPSD"]["global"] = []
+
+            out[level]['SRSS']["PFA"]["global"] = []
+            out[level]['SRSS']["disp"]["global"] = []
+            out[level]['SRSS']["PSD"]["global"] = []
+            out[level]['SRSS']["RPSD"]["global"] = []
 
             # for each record level
             for record in next(os.walk(self.msa / level))[-1]:
@@ -181,6 +191,32 @@ class MSAPostprocessor:
                     r stands for number of steps of the record
                 """
                 data = read_pickle(self.msa / level / record)
+
+                # SRSS
+                pfa = (data[0][0]**2 + data[0][1]**2)**0.5
+                disp = (data[1][0]**2 + data[1][1]**2)**0.5
+                psd = (data[2][0]**2 + data[2][1]**2)**0.5
+
+                res_drift_global = 0
+                for st in range(nst + 1):
+                    out[level]['SRSS']["PFA"][st].append(np.amax(pfa[st]))
+                    out[level]['SRSS']["disp"][st].append(np.amax(disp[st]))
+                    if st != nst:
+                        out[level]['SRSS']["PSD"][st + 1].append(np.amax(psd[st]))
+
+                        res_drift_val = (
+                            self._compute_residual_drift(abs(data[3][0][st]), abs(data[2][0][st]))**2 +
+                            self._compute_residual_drift(abs(data[3][1][st]), abs(data[2][1][st]))**2
+                        )**0.5
+                        if res_drift_val > res_drift_global:
+                            res_drift_global = res_drift_val
+
+                        out[level]['SRSS']["RPSD"][st + 1].append(res_drift_val)
+
+                out[level]['SRSS']["PFA"]["global"].append(np.amax(pfa))
+                out[level]['SRSS']["disp"]["global"].append(np.amax(disp))
+                out[level]['SRSS']["PSD"]["global"].append(np.amax(psd))
+                out[level]['SRSS']["RPSD"]["global"].append(res_drift_global)
 
                 for d in range(n_dir):
                     res_drift_global = 0

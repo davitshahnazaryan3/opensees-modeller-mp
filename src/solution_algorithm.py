@@ -54,7 +54,7 @@ def apply_time_series(
     omegas = np.array(omegas)
 
     w1 = omegas[0]
-    w2 = omegas[1]
+    w2 = omegas[2]
     a0 = 2 * w1 * w2 / (w2 ** 2 - w1 ** 2) * \
         (w2 * damping - w1 * damping)
     a1 = 2 * w1 * w2 / (w2 ** 2 - w1 ** 2) * \
@@ -64,14 +64,19 @@ def apply_time_series(
     op.rayleigh(a0, 0.0, 0.0, a1)
 
     # Time series excitation
-    op.timeSeries('Path', tstagx, '-dt', dt,
-                  '-filePath', str(pathx), '-factor', fx)
+    # op.timeSeries('Path', tstagx, '-dt', dt,
+    #               '-filePath', str(pathx), '-factor', fx)
+    accx = list(np.loadtxt(pathx)[:, 1])
+    op.timeSeries('Path', tstagx, '-dt', dt, '-values', *accx, '-factor', fx)
 
     op.pattern('UniformExcitation', ptagx, 1, '-accel', tstagx)
 
     if pathy is not None:
-        op.timeSeries('Path', tstagy, '-dt', dt,
-                      '-filePath', str(pathy), '-factor', fy)
+        # op.timeSeries('Path', tstagy, '-dt', dt,
+        #               '-filePath', str(pathy), '-factor', fy)
+        accy = list(np.loadtxt(pathy)[:, 1])
+        op.timeSeries('Path', tstagy, '-dt', dt, '-values', *accy,
+                      '-factor', fy)
         op.pattern('UniformExcitation', ptagy, 2, '-accel', tstagy)
 
     # Constraints

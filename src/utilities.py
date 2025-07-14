@@ -3,6 +3,7 @@ import pickle
 import numpy as np
 from scipy import stats
 from scipy.interpolate import interp1d
+from scipy.optimize import minimize
 import ast
 from pathlib import Path
 import warnings
@@ -158,7 +159,7 @@ def read_txt(path):
     return integers
 
 
-def mlefit(median: float, dispersion: float, total_count: int, count: int,
+def mlefit_ida(median: float, dispersion: float, total_count: int, count: int,
            data) -> float:
     """Maximum likelihood method
     Performs a lognormal cumulative distribution function fit to the data
@@ -198,6 +199,68 @@ def mlefit(median: float, dispersion: float, total_count: int, count: int,
         warnings.resetwarnings()
 
         return 1e+8
+
+
+def mlefit_msa(points, trials, observations, initial_guess=None):
+    """
+    Details
+    -------
+    Applies maximum likelihood estimation to determine lognormal distribution parameters.
+    Here, log-normal distribution represents the fragility curve.
+
+    References
+    ----------
+    Baker, J. W. (2015). Earthquake Spectra, 31(1), 579-599
+
+    Parameters
+    ----------
+    points: numpy.ndarray (1xn)
+        Points or intensity measure levels (IML) of interest
+    trials: numpy.ndarray
+        Number of trials or ground motions at IMLs
+    observations: numpy.ndarray (1xn)
+        number of observations or collapses observed at IMLs
+    initial_guess: list, optional (The default is None)
+        Initial guess for the log-normal distribution parameters [theta,beta]
+
+    Returns
+    -------
+    sol.x: numpy.ndarray
+        Logarithmic mean and standard deviation for the fitted fragility curve
+
+    Example
+    -------
+    Same as on Baker's video: https://www.youtube.com/watch?v=Q8e0_d81a40
+    mle_fit(im=[0.2,0.3,0.4,0.6,0.7,0.8,0.9,1.0], trials = 40, obs = [0,0,0,4,6,13,12,16])
+    output: array([1.07611623, 0.42923779])
+    """
+
+    if initial_guess is None:
+        initial_guess = [0.8, 0.4]
+
+    if len(trials if type(trials) is list else [trials]) == 1:
+        trials = np.repeat(trials, len(points))
+
+    def func(x):
+        theta, beta = x
+        # poes = observations / trials
+        # evaluates the probability calculated under the initial assumption of theta and beta
+        poes_fitted = stats.lognorm.cdf(points, beta, scale=theta)
+        # calculates the likelihood of the parameters being correct
+        likelihood = stats.binom.pmf(k=observations, n=trials, p=poes_fitted)
+        likelihood[likelihood <= 0] = 1e-200  # do not assign zero, assign zero like value
+        # sum of the logs of the likelihood to be minimized
+        return -np.sum(np.log(likelihood))
+
+    # this finds a solution, bounds prevent negative values, check documentation for other settings
+    try:
+        sol = minimize(func, x0=initial_guess, method='SLSQP', bounds=((0, None), (0, None)))
+    except:
+        initial_guess = [1.0, 0.5]
+        sol = minimize(func, x0=initial_guess, method='SLSQP', bounds=((0, None), (0, None)))
+
+    return sol.x
+
 
 
 def spline(x, y, size: int = 1000) -> tuple[np.ndarray, np.ndarray]:

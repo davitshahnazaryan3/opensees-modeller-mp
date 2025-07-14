@@ -1,6 +1,7 @@
 import openseespy.opensees as ops
-from .model import build_model
 from pathlib import Path
+
+from .model import build_model
 
 
 def do_modal(num_modes: int = 3) -> dict:

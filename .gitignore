@@ -1,4 +1,5 @@
 venv
+.venv
 dump
 data/
 __pycache__/

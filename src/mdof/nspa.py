@@ -1,50 +1,54 @@
 import openseespy.opensees as ops
 from pathlib import Path
+
 from .model import build_model
 
 
-def _set_algorithm(ok: int, tol: float, iter: int = 100) -> None:
+def _set_algorithm(tol: float, ctrl_node: int, ctrl_dof: int, dincr: float, iter: int = 100) -> None:
     """Sets the solution algorithm for NSPA in ops domain.
 
     Parameters
     ----------
-    ok : int
-        Result of the last analysis step in OpenSees.
     tol : float
         The tolerance criteria used to check for convergence.
+    ctrl_node : int
+        Tag of control node.
+    ctrl_dof : int
+        Tag of control degrees of freedom, i.e., 1 or 2.
+    dincr : float
+        The displacement increment considered during analysis.
     iter : int, optional
         The max number of iterations to check before returning failure.
         By default 100.
+
     Return
     ------
     int
         Result of the new analysis step in OpenSees.
     """
+    # Set testing and control procedures
+    ops.test('NormDispIncr', tol, iter)
+    ops.integrator('DisplacementControl', ctrl_node, ctrl_dof, dincr)
     # Try KrylovNewton
-    if ok != 0:
-        ops.test('NormDispIncr', tol, iter)
-        ops.algorithm('KrylovNewton')
-        ok = ops.analyze(1)
+    ops.algorithm('KrylovNewton')
+    ok = ops.analyze(1)
     # Try NewtonLineSearch algorithm
     if ok != 0:
-        ops.test('NormDispIncr', tol, iter)
-        ops.algorithm('NewtonLineSearch')
+        ops.algorithm('NewtonLineSearch', '-InitialInterpolated', 0.8)
         ok = ops.analyze(1)
     # Try Broyden algorithm
     if ok != 0:
-        ops.test('NormDispIncr', tol, iter)
         ops.algorithm('Broyden', 50)
         ok = ops.analyze(1)
     # Try Broyden-Fletcher-Goldfarb-Shanno (BFGS) algorithm
     if ok != 0:
-        ops.test('NormDispIncr', tol, iter)
         ops.algorithm('BFGS')
         ok = ops.analyze(1)
     # Return the analysis result
     return ok
 
 
-def do_nspa_x(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float], list[float]]:
+def do_nspa_x(max_drift: float = 0.1, dincr: float = 0.0001) -> tuple[list[float], list[float]]:
     """Performs nonlinear static pushover analysis (NSPA) in x direction.
 
     Parameters
@@ -54,7 +58,7 @@ def do_nspa_x(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
         By default 0.1
     dincr : float, optional.
         First displacement increment considered during the analysis.
-        By default 0.001.
+        By default 0.0001.
 
     Return
     ------
@@ -78,15 +82,15 @@ def do_nspa_x(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
     ops.timeSeries('Linear', 2)
     ops.pattern('Plain', 2, 2)
     # Add lateral nspa loads to ops domain
-    ops.load(91000, 0.1328947611629883, 0, 0, 0, 0, 0)
-    ops.load(92000, 0.23595747630874042, 0, 0, 0, 0, 0)
-    ops.load(93000, 0.33805977214376115, 0, 0, 0, 0, 0)
-    ops.load(94000, 0.29308799038451017, 0, 0, 0, 0, 0)
+    ops.load(91000, 0.13407360273425917, 0, 0, 0, 0, 0)
+    ops.load(92000, 0.25520925742355594, 0, 0, 0, 0, 0)
+    ops.load(93000, 0.34728011988139607, 0, 0, 0, 0, 0)
+    ops.load(94000, 0.26343701996078883, 0, 0, 0, 0, 0)
 
     # Set the recorders
     ctrl_node = 94000  # Control node
     ctrl_dof = 1  # Control dof
-    supports = [70001, 70005, 70009, 70013, 70017, 70002, 70006, 70010, 70014, 70018, 70003, 70007, 70011, 70015, 70019, 70004, 70008, 70012, 70016, 70020]  # Foundation nodes
+    supports = [70000, 70010, 70020, 70100, 70110, 70120, 70200, 70210, 70220, 70300, 70310, 70320, 70400, 70410, 70420, 70500, 70510, 70520]  # Foundation nodes
     floors = [91000, 92000, 93000, 94000]  # Retained floor nodes
     ops.recorder('Node', '-file', disp_file_path, '-node', *floors, '-dof', ctrl_dof, 'disp')
     ops.recorder('Node', '-file', reaction_file_path, '-node', *supports, '-dof', ctrl_dof, 'reaction')
@@ -100,7 +104,7 @@ def do_nspa_x(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
 
     # Set some analysis parameters
     max_disp = max_drift * (ops.nodeCoord(ctrl_node, 3) - base_level)
-    tol_init = 1.0e-6
+    tol_init = 1.0e-5
     iter_init = 20
     ops.wipeAnalysis()
     ops.system('UmfPack')
@@ -117,22 +121,18 @@ def do_nspa_x(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
     ok = 0
     cont = True
     while ok == 0 and cont:
-        ops.test('NormDispIncr', tol_init, iter_init)
-        ops.integrator('DisplacementControl', ctrl_node, ctrl_dof, dincr)
-        ops.algorithm('Newton', '-initialThenCurrent')
+        # Perform the analysis for a single step with current settings
         ok = ops.analyze(1)
         if ok != 0:  # try other algorithms
-            ok = _set_algorithm(ok, tol_init)
+            ok = _set_algorithm(tol_init, ctrl_node, ctrl_dof, dincr)
         if ok != 0:  # reduce dincr to an half
-            ops.integrator('DisplacementControl', ctrl_node, ctrl_dof, 0.5*dincr)
-            ok = _set_algorithm(ok, tol_init)
+            ok = _set_algorithm(tol_init, ctrl_node, ctrl_dof, 0.5 * dincr)
         if ok != 0:  # reduce dincr to a quarter
-            ops.integrator('DisplacementControl', ctrl_node, ctrl_dof, 0.25*dincr)
-            ok = _set_algorithm(ok, tol_init)
+            ok = _set_algorithm(tol_init, ctrl_node, ctrl_dof, 0.25 * dincr)
         if ok != 0:  # increase tolerance by factor of 10
-            ok = _set_algorithm(ok, 10*tol_init)
+            ok = _set_algorithm(10 * tol_init, ctrl_node, ctrl_dof, 0.25 * dincr)
         if ok != 0:  # increase tolerance by factor of 100
-            ok = _set_algorithm(ok, 100*tol_init)
+            ok = _set_algorithm(100 * tol_init, ctrl_node, ctrl_dof, 0.25 * dincr)
 
         # Get the base shear force
         ops.reactions()
@@ -151,7 +151,7 @@ def do_nspa_x(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
     return ctrl_disp, base_shear
 
 
-def do_nspa_y(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float], list[float]]:
+def do_nspa_y(max_drift: float = 0.1, dincr: float = 0.0001) -> tuple[list[float], list[float]]:
     """Performs nonlinear static pushover analysis (NSPA) in y direction.
 
     Parameters
@@ -161,7 +161,7 @@ def do_nspa_y(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
         By default 0.1
     dincr : float, optional.
         First displacement increment considered during the analysis.
-        By default 0.001.
+        By default 0.0001.
 
     Return
     ------
@@ -185,15 +185,15 @@ def do_nspa_y(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
     ops.timeSeries('Linear', 2)
     ops.pattern('Plain', 2, 2)
     # Add lateral nspa loads to ops domain
-    ops.load(91000, 0, 0.1328947611629883, 0, 0, 0, 0)
-    ops.load(92000, 0, 0.23595747630874042, 0, 0, 0, 0)
-    ops.load(93000, 0, 0.33805977214376115, 0, 0, 0, 0)
-    ops.load(94000, 0, 0.29308799038451017, 0, 0, 0, 0)
+    ops.load(91000, 0, 0.13799161008035973, 0, 0, 0, 0)
+    ops.load(92000, 0, 0.2572955243376413, 0, 0, 0, 0)
+    ops.load(93000, 0, 0.3453282565350739, 0, 0, 0, 0)
+    ops.load(94000, 0, 0.2593846090469251, 0, 0, 0, 0)
 
     # Set the recorders
     ctrl_node = 94000  # Control node
     ctrl_dof = 2  # Control dof
-    supports = [70001, 70005, 70009, 70013, 70017, 70002, 70006, 70010, 70014, 70018, 70003, 70007, 70011, 70015, 70019, 70004, 70008, 70012, 70016, 70020]  # Foundation nodes
+    supports = [70000, 70010, 70020, 70100, 70110, 70120, 70200, 70210, 70220, 70300, 70310, 70320, 70400, 70410, 70420, 70500, 70510, 70520]  # Foundation nodes
     floors = [91000, 92000, 93000, 94000]  # Retained floor nodes
     ops.recorder('Node', '-file', disp_file_path, '-node', *floors, '-dof', ctrl_dof, 'disp')
     ops.recorder('Node', '-file', reaction_file_path, '-node', *supports, '-dof', ctrl_dof, 'reaction')
@@ -207,7 +207,7 @@ def do_nspa_y(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
 
     # Set some analysis parameters
     max_disp = max_drift * (ops.nodeCoord(ctrl_node, 3) - base_level)
-    tol_init = 1.0e-6
+    tol_init = 1.0e-5
     iter_init = 20
     ops.wipeAnalysis()
     ops.system('UmfPack')
@@ -224,22 +224,18 @@ def do_nspa_y(max_drift: float = 0.1, dincr: float = 0.001) -> tuple[list[float]
     ok = 0
     cont = True
     while ok == 0 and cont:
-        ops.test('NormDispIncr', tol_init, iter_init)
-        ops.integrator('DisplacementControl', ctrl_node, ctrl_dof, dincr)
-        ops.algorithm('Newton', '-initialThenCurrent')
+        # Perform the analysis for a single step with current settings
         ok = ops.analyze(1)
         if ok != 0:  # try other algorithms
-            ok = _set_algorithm(ok, tol_init)
+            ok = _set_algorithm(tol_init, ctrl_node, ctrl_dof, dincr)
         if ok != 0:  # reduce dincr to an half
-            ops.integrator('DisplacementControl', ctrl_node, ctrl_dof, 0.5*dincr)
-            ok = _set_algorithm(ok, tol_init)
+            ok = _set_algorithm(tol_init, ctrl_node, ctrl_dof, 0.5 * dincr)
         if ok != 0:  # reduce dincr to a quarter
-            ops.integrator('DisplacementControl', ctrl_node, ctrl_dof, 0.25*dincr)
-            ok = _set_algorithm(ok, tol_init)
+            ok = _set_algorithm(tol_init, ctrl_node, ctrl_dof, 0.25 * dincr)
         if ok != 0:  # increase tolerance by factor of 10
-            ok = _set_algorithm(ok, 10*tol_init)
+            ok = _set_algorithm(10 * tol_init, ctrl_node, ctrl_dof, 0.25 * dincr)
         if ok != 0:  # increase tolerance by factor of 100
-            ok = _set_algorithm(ok, 100*tol_init)
+            ok = _set_algorithm(100 * tol_init, ctrl_node, ctrl_dof, 0.25 * dincr)
 
         # Get the base shear force
         ops.reactions()
